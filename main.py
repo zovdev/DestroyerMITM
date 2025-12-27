@@ -8,49 +8,38 @@ from mitmproxy import http
 from mitmproxy.tools.dump import DumpMaster
 
 
-BANNED = [           # Блокировка хостов и URL
-    # HOST
-        # {"type": "AD", "qtype": 0, "q": "aj1907.online"},
-        # {"type": "AD", "qtype": 0, "q": "adlook.me"},
-        {"type": "AD", "qtype": 0, "q": "ad.mail.ru"},
-        # {"type": "AD", "qtype": 0, "q": "s2517.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "stats.vk-portal.net"},
-        # {"type": "Tracker", "qtype": 0, "q": "vak345.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "adpod.in"},
-        # {"type": "Tracker", "qtype": 0, "q": "google-analytics.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "top-fwz1.mail.ru"},
-        # {"type": "Tracker", "qtype": 0, "q": "adfox.ru"},
-        # {"type": "Tracker", "qtype": 0, "q": "track.smachnakittchen.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "log.strm.yandex.ru"},
-        # {"type": "Tracker", "qtype": 0, "q": "statika.mpsuadv.ru"},
-        # {"type": "Tracker", "qtype": 0, "q": "ssrv7.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "stats.rip"},
-        # {"type": "Tracker", "qtype": 0, "q": "mixpanel.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "tns-counter.ru"},
-        # {"type": "Tracker", "qtype": 0, "q": "analytics.google.com"},
-        # {"type": "Tracker", "qtype": 0, "q": "counter.yadro.ru"},
-    # URL
-        {"type": "AD", "qtype": 2, "q": "yandex.ru/ads"},
-        # {"type": "AD", "qtype": 2, "q": "a.magsrv.com/ad-provider.js"},
-        # {"type": "Tracker", "qtype": 2, "q": "yandex.ru/an/rtbcount"},
-        # {"type": "Tracker", "qtype": 2, "q": "yandex.ru/metrika"},
-        # {"type": "Tracker", "qtype": 2, "q": "yandex.ru/clck/jclck/"},
-        # {"type": "Tracker", "qtype": 2, "q": "yandex.ru/clck/click"},
-        # {"type": "Tracker", "qtype": 2, "q": "static-mon.yandex.net/advert"},
-        # {"type": "Tracker", "qtype": 2, "q": "api.insertunit.ws/ping/"},
+BANNED_HOST = [
+    "ad.mail.ru",
+    "stats.vk-portal.net",
+    "top-fwz1.mail.ru",
+    "egress.yandex.net",
+    "googleads.g.doubleclick.net"
+]
+
+BANNED_URL = [
+    "yandex.ru/ads",
+    "yandex.ru/clck/safeclick",
+    "mc.yandex.ru/watch",
+    "yandex.ru/search/zero",
+    "yastatic.net/nearest.js",
+    "yandex.ru/ick/r",
+    "yandex.ru/metrika",
 ]
 
 
 STREAM_TRUE = {
     "image", "webm", "svg"
-    "video", "mp4", "mp2t", "wasm",
-    "octet-stream", "font"
+    "video", "mp4", "mp2t", "wasm", "vnd.yt-ump",
+    "audio",
+    "octet-stream", "font", "css",
 }
+
 STREAM_FALSE = {
-    "html", "xml", "css",
+    "html", "xml",
     "javascript", "js",
-    "json"
+    "json", "text"
 }
+
 
 DECOMPRESSORS = {
     'gzip': (gzip.decompress, gzip.compress),
@@ -59,51 +48,37 @@ DECOMPRESSORS = {
     'zstd': (zstd.decompress, zstd.compress)
 }
 
+host_regex = re.compile(f"^(?:{'|'.join(re.escape(i) for i in BANNED_HOST)})(?:/|$)", re.IGNORECASE)
+substr_regex = re.compile(f"({'|'.join(re.escape(i) for i in BANNED_URL)})", re.IGNORECASE)
 
 class CustomHandlers:
-    def __init__(self):
-        host_patterns = []
-        substr_patterns = []
-
-        for item in BANNED:
-            if item['qtype'] == 0:
-                host_patterns.append(re.escape(item['q']))
-            elif item['qtype'] == 2:
-                substr_patterns.append(re.escape(item['q']))
-
-        group1 = f"^(?:{'|'.join(host_patterns)})(?:/|$)"
-        group2 = f".*(?:{'|'.join(substr_patterns)}).*"
-        self.ban_regex = re.compile(rf"({group1})|((?!{group1}).*{group2})", re.IGNORECASE)
-
     async def requestheaders(self, flow: http.HTTPFlow):
-        full_url = flow.request.host + flow.request.path
+        hostis = host_regex.search(flow.request.host)
+        if hostis is not None:
+            print(f"banned by HOST: {hostis.group()}")
+            return flow.kill()
 
-        match = self.ban_regex.search(full_url)
+        pathis = substr_regex.search(flow.request.host + flow.request.path)
+        if pathis is not None:
+            print(f"banned by PATH: {pathis.group()}")
+            return flow.kill()
 
-        if not match:
-            return
-
-        matches = match.groups()
-
-        if matches[0]:
-            print(f"banned by HOST: {matches[0]}")
-        elif matches[1]:
-            print(f"banned by PATH: {matches[1][:30]}")
-        else:
-            return print(f"NOT MATCHES [{matches}] -> {full_url[:30]}")
-
-        flow.kill()
+    async def request(self, flow: http.HTTPFlow):
+        1
 
     async def responseheaders(self, flow: http.HTTPFlow):
         ctype = flow.response.headers.get("content-type", "").lower()
 
-        if any(t in ctype for t in STREAM_FALSE):
-            flow.response.stream = False
-            return
-        elif any(t in ctype for t in STREAM_TRUE):
-            flow.response.stream = True
-            return
-        elif ctype:
+        for t in STREAM_FALSE:
+            if t in ctype:
+                flow.response.stream = False
+                return
+        for t in STREAM_TRUE:
+            if t in ctype:
+                flow.response.stream = True
+                return
+
+        if ctype:
             print(f"НЕ ОПРЕДЛЕННЫЙ ТИП -> {ctype}")
 
         clen = flow.response.headers.get("content-length")
@@ -114,6 +89,7 @@ class CustomHandlers:
     async def response(self, flow: http.HTTPFlow):
         if not flow.response.raw_content:
             return
+
         ce = flow.response.headers.get("content-encoding", "").lower()
         if ce in DECOMPRESSORS:
             decompress, compress = DECOMPRESSORS[ce]
