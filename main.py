@@ -55,13 +55,15 @@ class CustomHandlers:
     async def requestheaders(self, flow: http.HTTPFlow):
         hostis = host_regex.search(flow.request.host)
         if hostis is not None:
-            print(f"banned by HOST: {hostis.group()}")
-            return flow.kill()
+            print(f"Banned from HOST: {hostis.group()}")
+            flow.response = http.Response.make(200, b"Banned from HOST filter<br>by DestroyerMITM", {"Content-Type": "text/plain"})
+            return
 
         pathis = substr_regex.search(flow.request.host + flow.request.path)
         if pathis is not None:
-            print(f"banned by PATH: {pathis.group()}")
-            return flow.kill()
+            print(f"Banned from PATH: {pathis.group()}")
+            flow.response = http.Response.make(200, b"Banned from PATH filter\n\nby DestroyerMITM", {"Content-Type": "text/plain"})
+            return
 
     async def request(self, flow: http.HTTPFlow):
         1
